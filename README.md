@@ -87,6 +87,14 @@ python src/main.py
 3.  **Process**: Click "Start Processing". The app will analyze pages and split them automatically.
 4.  **Review**: Check the logs window for details on detected case numbers.
 
+## 🏎️ Architecture & Performance
+
+The application is engineered for stability and high responsiveness using the following architecture:
+
+1.  **Multiprocessing**: The heavy OCR lifting runs in a **separate system process** (`multiprocessing.Process`), completely isolated from the Main UI process. This ensures the application interface remains butter-smooth and responsive (drag/resize) even when the CPU is at 100% load.
+2.  **Thread Limiting**: CPU affinity is strictly managed. Environment variables (`OMP_NUM_THREADS=1`, `PADDLE_NUM_THREADS=1`) are set to prevent the OCR engine from monopolizing all CPU cores, preventing system-wide freezes.
+3.  **Excel Summary**: A `summary.xlsx` file is generated at the end of every job, listing every created PDF file and its source page range.
+
 ## 📝 Logging System
 
 The application uses a dual-logging system ensures you never lose track of what happened.

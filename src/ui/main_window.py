@@ -1,6 +1,7 @@
 import logging
 import queue
 import threading
+import multiprocessing
 from pathlib import Path
 from datetime import datetime
 
@@ -12,7 +13,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import QThread, pyqtSignal, QTimer, Qt, QSize
 from PyQt6.QtGui import QFont, QDragEnterEvent, QDropEvent, QIcon, QPixmap
 
-from core.pdf_processor import PDFProcessor
+from core.pdf_processor import PDFProcessor, run_processing_task
 from config.app_config import config
 from core.pdf_processor import PDFProcessor
 from config.app_config import config
@@ -82,6 +83,13 @@ class MainWindow(QMainWindow):
         self.total_pages = 0
         self.files_created = 0
         self.processing_start_time = None
+        
+        # Multiprocessing handles
+        self.processing_process = None
+        self.process_queue = None
+        self.process_stop_event = None
+        self.status_timer = QTimer()
+        self.status_timer.timeout.connect(self.check_process_status)
         
         self.init_ui()
         self.apply_theme()
@@ -717,8 +725,9 @@ class MainWindow(QMainWindow):
             "question"
         ):
             logging.info("User requested to cancel processing")
-            if self.processor:
-                self.processor.cancel()
+            if self.process_stop_event:
+                self.process_stop_event.set()
+                
             self.stop_btn.setEnabled(False)
             self.stop_btn.setText("Canceling...")
     
@@ -745,13 +754,50 @@ class MainWindow(QMainWindow):
         self.files_created = 0
         
         cfg = config.data.get('processing', {})
-        self.processor = PDFProcessor(self.selected_file, self.selected_folder, cfg)
-        self.processor.set_callback(self.processor_callback)
+        # Prepare Multiprocessing
+        self.process_queue = multiprocessing.Queue()
+        self.process_stop_event = multiprocessing.Event()
         
-        self.processing_thread = ProcessorThread(self.processor)
-        self.processing_thread.finished.connect(self.on_processing_complete)
-        self.processing_thread.error.connect(self.on_processing_error)
-        self.processing_thread.start()
+        # Use simple args that can be pickled
+        args = (
+            str(self.selected_file), 
+            str(self.selected_folder), 
+            cfg, 
+            self.process_queue, 
+            self.process_stop_event
+        )
+        
+        self.processing_process = multiprocessing.Process(
+            target=run_processing_task, 
+            args=args
+        )
+        self.processing_process.start()
+        
+        # Start polling timer
+        self.status_timer.start(100)
+    
+    def check_process_status(self):
+        """Poll the multiprocessing queue for status updates"""
+        try:
+            while self.process_queue and not self.process_queue.empty():
+                item = self.process_queue.get_nowait()
+                if item:
+                    event_type, progress, message = item
+                    
+                    # Handle specific signals
+                    if event_type == 'complete':
+                        self.status_timer.stop()
+                        self.processing_process.join()
+                        self.on_processing_complete()
+                    elif event_type == 'error':
+                        self.status_timer.stop()
+                        self.processing_process.join()
+                        self.on_processing_error(message)
+                    else:
+                        # Forward progress/info to existing callback
+                        self.processor_callback(event_type, progress, message)
+        except Exception:
+            pass
     
     def processor_callback(self, event_type, progress, message):
         if event_type == 'progress':
@@ -844,9 +890,13 @@ class MainWindow(QMainWindow):
         self.stacked_widget.setCurrentIndex(0)
     
     def update_logs(self):
+        # Process pending log messages (max 50 to avoid freezing GUI)
         try:
-            while True:
-                log_queue.get_nowait()
+            count = 0
+            while count < 50:
+                msg = log_queue.get_nowait()
+                # Optionally process msg here if needed, currently we just drain
+                count += 1
         except queue.Empty:
             pass
     

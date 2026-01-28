@@ -3,6 +3,7 @@ import re
 import logging
 import threading
 import time
+import traceback
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -17,23 +18,22 @@ class PDFProcessor:
         self.input_path = Path(input_path)
         self.output_folder = Path(output_folder)
         self.config = config or {}
-        self.stop_event = threading.Event()
-        self.status_callback: Optional[Callable[[str, float, str], None]] = None
+        # In multiprocessing, event is passed in
+        self.stop_event = None 
+        self.status_queue = None
         self._ocr = get_engine()
 
-    def set_callback(self, callback):
-        """
-        Callback signature: (event_type: str, progress: float, message: str)
-        event_type: 'info', 'progress', 'error', 'complete'
-        """
-        self.status_callback = callback
+    def set_queue(self, queue):
+        self.status_queue = queue
 
-    def cancel(self):
-        self.stop_event.set()
+    def set_stop_event(self, event):
+        self.stop_event = event
 
     def _emit(self, event_type, progress, message):
-        if self.status_callback:
-            self.status_callback(event_type, progress, message)
+        if self.status_queue:
+            self.status_queue.put((event_type, progress, message))
+            
+
 
     def run(self):
         try:
@@ -89,6 +89,9 @@ class PDFProcessor:
             while scan_index < total_pages:
                 if self.stop_event.is_set():
                     break
+                
+                # Small sleep to yield GIL to Main Thread (UI) to prevent lag
+                time.sleep(0.05)
                 
                 # Update granular progress
                 self._emit('progress', scan_index / total_pages, f"Scanning page {scan_index + 1}...")
@@ -299,3 +302,16 @@ class PDFProcessor:
                     best_score = score
                     best_match = text.replace("I", "1").strip()
         return best_match
+
+# Standalone worker function for multiprocessing (Must be outside class)
+def run_processing_task(input_path, output_path, config, queue, stop_event):
+    try:
+        # Re-setup logging for this process if needed or relying on queue
+        # We will rely on queue for specific updates
+        
+        processor = PDFProcessor(input_path, output_path, config)
+        processor.set_queue(queue)
+        processor.set_stop_event(stop_event)
+        processor.run()
+    except Exception as e:
+        queue.put(('error', 0, str(e)))

@@ -35,7 +35,10 @@ class OCREngine:
             
             logging.info(f"Initializing PaddleOCR (Lang: {lang})...")
             # Initialize PaddleOCR
-            self._ocr = PaddleOCR(use_angle_cls=use_angle_cls, lang=lang, show_log=False)
+            self._ocr = PaddleOCR(use_angle_cls=use_angle_cls, lang=lang)
+            # Silence internal logger
+            logging.getLogger("ppocr").setLevel(logging.ERROR)
+            
             logging.info("PaddleOCR initialized successfully.")
         except Exception as e:
             logging.error(f"Failed to initialize PaddleOCR: {e}")
