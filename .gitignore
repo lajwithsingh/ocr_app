@@ -11,7 +11,7 @@ env/
 # Distribution / PyInstaller
 build/
 dist/
-*.spec
+^ocr_app.spec
 
 # Logs
 *.log

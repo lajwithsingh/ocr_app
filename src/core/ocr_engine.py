@@ -34,8 +34,42 @@ class OCREngine:
             except: pass
             
             logging.info(f"Initializing PaddleOCR (Lang: {lang})...")
-            # Initialize PaddleOCR
-            self._ocr = PaddleOCR(use_angle_cls=use_angle_cls, lang=lang)
+            
+            # Check for bundled models (offline support)
+            # Priorities: 1. sys._MEIPASS/models (Frozen), 2. ./models (Local Dev)
+            import sys
+            from pathlib import Path
+            
+            model_args = {}
+            base_model_dir = Path("models").absolute()
+            if getattr(sys, 'frozen', False):
+                base_model_dir = Path(sys._MEIPASS) / "models"
+            
+            if base_model_dir.exists():
+                logging.info(f"Using bundled models at: {base_model_dir}")
+                
+                # Dynamic model finder (matches what bundle_models.py copied)
+                def find_model_dir(keyword):
+                    # Search for directory containing keyword
+                    # Prefer exact matches if possible, but structure varies
+                    for item in base_model_dir.rglob(f"*{keyword}*"):
+                        if item.is_dir():
+                            return str(item)
+                    return None
+                
+                det_path = find_model_dir("det")
+                rec_path = find_model_dir("rec")
+                cls_path = find_model_dir("cls")
+                
+                if det_path: model_args['det_model_dir'] = det_path
+                if rec_path: model_args['rec_model_dir'] = rec_path
+                if cls_path: model_args['cls_model_dir'] = cls_path
+                
+                logging.info(f"Found models: Det={det_path}, Rec={rec_path}, Cls={cls_path}")
+
+            # Initialize PaddleOCR with detected args
+            self._ocr = PaddleOCR(use_textline_orientation=use_angle_cls, lang=lang, **model_args)
+            
             # Silence internal logger
             logging.getLogger("ppocr").setLevel(logging.ERROR)
             

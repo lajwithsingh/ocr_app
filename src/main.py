@@ -7,6 +7,17 @@ os.environ['OMP_NUM_THREADS'] = '1'
 os.environ['MKL_NUM_THREADS'] = '1'
 os.environ['OPENBLAS_NUM_THREADS'] = '1'
 os.environ['PADDLE_NUM_THREADS'] = '1'
+from pathlib import Path
+
+# Disable PaddleOCR connectivity check as models are bundled
+# Note: Newer Paddle versions use the PDX prefix
+os.environ['DISABLE_MODEL_SOURCE_CHECK'] = 'True'
+os.environ['PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK'] = 'True'
+os.environ['PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK'] = '1'
+
+import warnings
+# Suppress annoying library warnings
+warnings.filterwarnings("ignore", message="No ccache found")
 
 import sys
 import logging

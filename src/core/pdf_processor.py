@@ -1,11 +1,9 @@
 import io
 import re
 import logging
-import threading
 import time
 import traceback
 from pathlib import Path
-from typing import Callable, Optional
 
 import fitz  # PyMuPDF
 from PIL import Image
@@ -99,10 +97,9 @@ class PDFProcessor:
                 # OCR
                 left_img, right_img = self._get_footer_crops(doc, scan_index, bottom_fraction, dpi)
                 
-                # Logic from original script:
-                # OCR left for case, right for page
+                # Perform OCR on cropped footer sections
                 left_text_lines = self._ocr.extract_text(left_img, self.config)
-                right_text_lines = self._ocr.extract_text(right_img, {**self.config, 'upscale': 1}) # original used upscale=1 for right
+                right_text_lines = self._ocr.extract_text(right_img, {**self.config, 'upscale': 1})
 
                 detected_case = None if carried_case else self._detect_case_number(left_text_lines)
                 detected_page = None if carried_page else self._detect_page_number(right_text_lines)
@@ -126,32 +123,15 @@ class PDFProcessor:
                         chunk_end_page = int(m.group(2))
                         chunk_case_num = current_case
                         pattern_found = True
-                        break # Found the end of this current logical document definition? 
-                        # Wait, original logic: it scans until it finds a "Page X of Y" and "Case Z". 
-                        # If found, it assumes this page belongs to the document defined by "Page X of Y".
-                        # The original logic loop:
-                        # It scans *forward* until it finds a valid pattern (Case + Page X of Y).
-                        # Once found, it calculates the *end* of the document based on the current page number X and total Y.
-                        # Then it saves the chunk from start_idx to end_idx.
-                        # Wait, if pattern is found at scan_index, and it says "Page 1 of 5", then the document is scan_index (page 1) to scan_index + 4.
-                        # If pattern is found at scan_index, and it says "Page 3 of 5", then the document started 2 pages ago?
-                        # Original logic:
-                        # start_idx = current_index
-                        # end_idx = scan_index + (end_page - start_page + 1) -> This assumes scan_index IS the page where we successfully read "Page start_page of end_page".
-                        # If we are at scan_index, and we read "Page 1 of 5", start_page=1, end_page=5.
-                        # end_idx (exclusive) = scan_index + (5 - 1 + 1) = scan_index + 5.
-                        # Wait, if we are at scan_index=0 (absolute), and read Page 1 of 5.
-                        # end_idx = 0 + 5 = 5. Pages 0,1,2,3,4. Corret.
-                        # What if we read Page 3 of 5 at scan_index 2?
-                        # start_idx (absolute) was current_index (0).
-                        # end_idx = 2 + (5 - 3 + 1) = 2 + 3 = 5.
-                        # Logic seems to assume the *current chunk being scanned* belongs to the detected document.
+                        # Logic: The "Page X of Y" pattern defines the document boundary.
+                        # The document ends at: scan_index + (Total_Y - Current_X)
+                        # We break here to process this chunk.
+                        break
                 
                 scan_index += 1
 
             if not pattern_found:
-                 # If no pattern found till end, maybe just save the rest as unknown or stop?
-                 # Original script says "No valid patterns found. Stopping."
+                 # No valid case/page pattern found in remaining pages
                  if not self.stop_event.is_set():
                      logging.warning("No valid pattern found in remaining pages.")
                  break
@@ -162,12 +142,8 @@ class PDFProcessor:
 
             # Determine range
             start_idx = current_index
-            # Calculate end index based on the found pattern
-            # Note: scan_index is where we found the match. 
-            # If we found "Page S of E" at `scan_index`:
-            # The document conceptually ends at `scan_index + (E - S)`. 
-            # Total pages = E. Remaining pages = E - S.
-            # So end_idx (exclusive) = scan_index + (E - S) + 1
+            # Calculate the final page index for this document
+            # Logic: scan_index + remaining_pages + 1
             calculated_end = scan_index + (chunk_end_page - chunk_start_page) + 1
             
             # We must clamp to total_pages
@@ -194,32 +170,8 @@ class PDFProcessor:
 
         doc.close()
         
-        # Generate Excel Summary
-        self._save_summary_excel()
-
-    def _save_summary_excel(self):
-        """Save processing summary to Excel"""
-        try:
-            import openpyxl
-            wb = openpyxl.Workbook()
-            ws = wb.active
-            ws.title = "Processing Summary"
-            
-            # Headers
-            ws.append(["PDF File Generated Name", "PDF Start Location", "PDF End Location"])
-            
-            # Data
-            for row in self.generated_files_data:
-                ws.append(list(row))
-                
-            excel_path = self.output_folder / "summary.xlsx"
-            wb.save(excel_path)
-            logging.info(f"Summary Excel saved to: {excel_path}")
-            self._emit('info', 1.0, f"Summary saved to summary.xlsx")
-            
-        except Exception as e:
-            logging.error(f"Failed to save Excel summary: {e}")
-            self._emit('error', 1.0, f"Failed to save Excel summary: {str(e)}")
+        # Send summary data to UI instead of auto-saving
+        self._emit('summary_data', 1.0, self.generated_files_data)
 
     def _save_chunk(self, src_doc, start, end, filename):
         try:

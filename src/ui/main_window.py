@@ -13,28 +13,12 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import QThread, pyqtSignal, QTimer, Qt, QSize
 from PyQt6.QtGui import QFont, QDragEnterEvent, QDropEvent, QIcon, QPixmap
 
-from core.pdf_processor import PDFProcessor, run_processing_task
-from config.app_config import config
-from core.pdf_processor import PDFProcessor
+from core.pdf_processor import run_processing_task
 from config.app_config import config
 from utils.logger import log_queue, add_output_logging, remove_handler
 
 
-class ProcessorThread(QThread):
-    """Background thread for PDF processing"""
-    finished = pyqtSignal()
-    error = pyqtSignal(str)
-    
-    def __init__(self, processor):
-        super().__init__()
-        self.processor = processor
-    
-    def run(self):
-        try:
-            self.processor.run()
-            self.finished.emit()
-        except Exception as e:
-            self.error.emit(str(e))
+
 
 
 class DropZoneLabel(QLabel):
@@ -74,8 +58,6 @@ class MainWindow(QMainWindow):
     
     def __init__(self):
         super().__init__()
-        self.processor = None
-        self.processing_thread = None
         # Data
         self.selected_file = None
         self.selected_folder = None
@@ -752,6 +734,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         self.progress_percent.setText("0%")
         self.files_created = 0
+        self.current_summary_data = [] # Data from processor
         
         cfg = config.data.get('processing', {})
         # Prepare Multiprocessing
@@ -789,6 +772,8 @@ class MainWindow(QMainWindow):
                         self.status_timer.stop()
                         self.processing_process.join()
                         self.on_processing_complete()
+                    elif event_type == 'summary_data':
+                        self.current_summary_data = message
                     elif event_type == 'error':
                         self.status_timer.stop()
                         self.processing_process.join()
@@ -828,15 +813,19 @@ class MainWindow(QMainWindow):
         self.reset_to_upload()
     
     def export_excel(self):
-        """Export summary with file save dialog"""
+        """Export summary with file save dialog (supports appending sheets)"""
         try:
+            if not self.current_summary_data:
+                self.show_message("Info", "No data to export.", "info")
+                return
+
             # Open save file dialog
-            default_name = f"Summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+            default_name = "Processing_Report.xlsx"
             default_path = str(Path(self.selected_folder) / default_name)
             
             save_path, _ = QFileDialog.getSaveFileName(
                 self,
-                "Save Summary",
+                "Save Report",
                 default_path,
                 "Excel Files (*.xlsx);;All Files (*)"
             )
@@ -844,30 +833,45 @@ class MainWindow(QMainWindow):
             if not save_path:  # User cancelled
                 return
             
-            # Create workbook
-            from openpyxl import Workbook
+            from openpyxl import Workbook, load_workbook
             
-            wb = Workbook()
-            ws = wb.active
-            ws.title = "Summary"
+            p_save = Path(save_path)
+            input_name = Path(self.selected_file).stem
+            sheet_title = input_name[:30] # Excel limit 31 chars
             
-            ws['A1'] = "PDF Separator - Processing Summary"
-            ws['A3'] = "Input File"
-            ws['B3'] = Path(self.selected_file).name
-            ws['A4'] = "Total Pages"
-            ws['B4'] = self.total_pages
-            ws['A5'] = "Files Created"
-            ws['B5'] = self.files_created
-            ws['A6'] = "Output Folder"
-            ws['B6'] = self.selected_folder
+            if p_save.exists():
+                try:
+                    wb = load_workbook(p_save)
+                    if sheet_title in wb.sheetnames:
+                        # Handle duplicate sheet name
+                        sheet_title = f"{sheet_title[:25]}_{datetime.now().strftime('%M%S')}"
+                    ws = wb.create_sheet(title=sheet_title)
+                except:
+                    # Fallback if corrupt
+                    wb = Workbook()
+                    ws = wb.active
+                    ws.title = sheet_title
+            else:
+                wb = Workbook()
+                ws = wb.active
+                ws.title = sheet_title
             
-            ws.column_dimensions['A'].width = 18
-            ws.column_dimensions['B'].width = 50
+            # Headers
+            ws.append(["PDF File Generated Name", "PDF Start Location", "PDF End Location"])
+            
+            # Data
+            for row in self.current_summary_data:
+                ws.append(list(row))
+                
+            # Formatting
+            ws.column_dimensions['A'].width = 30
+            ws.column_dimensions['B'].width = 20
+            ws.column_dimensions['C'].width = 20
             
             wb.save(save_path)
             
             logging.info(f"Summary exported to: {save_path}")
-            self.show_message("Success", f"Summary saved to:\n{save_path}")
+            self.show_message("Success", f"Report saved to:\n{save_path}")
         except Exception as e:
             logging.error(f"Export failed: {e}")
             self.show_message("Error", f"Failed to export:\n{str(e)}", "error")
@@ -902,15 +906,15 @@ class MainWindow(QMainWindow):
     
     def closeEvent(self, event):
         """Always show confirmation when closing the app"""
-        if self.processing_thread and self.processing_thread.isRunning():
-            # During processing
+        is_processing = self.processing_process and self.processing_process.is_alive()
+        
+        if is_processing:
             confirmed = self.show_message(
                 "Confirm Exit",
                 "Processing is in progress. Are you sure you want to exit?",
                 "question"
             )
         else:
-            # Not processing - still confirm
             confirmed = self.show_message(
                 "Confirm Exit",
                 "Are you sure you want to quit?",
@@ -918,10 +922,14 @@ class MainWindow(QMainWindow):
             )
         
         if confirmed:
-            if self.processor:
-                self.processor.cancel()
-            if self.processing_thread and self.processing_thread.isRunning():
-                self.processing_thread.wait(3000)
+            if is_processing:
+                # Signal stop
+                if self.process_stop_event:
+                    self.process_stop_event.set()
+                # Wait briefly then forcefully terminate if needed
+                self.processing_process.join(timeout=2.0)
+                if self.processing_process.is_alive():
+                    self.processing_process.terminate()
             event.accept()
         else:
             event.ignore()
