@@ -37,6 +37,9 @@ class PDFProcessor:
 
     def run(self):
         try:
+            # Ensure OCR is initialized in this worker thread to avoid QBasicTimer/Thread affinity issues
+            self._ocr.initialize()
+            
             self._emit('info', 0, f"Starting processing for {self.input_path.name}")
             self._process_pdf()
             if not self.stop_event.is_set():

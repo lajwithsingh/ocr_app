@@ -15,14 +15,27 @@ class OCREngine:
     def __new__(cls, lang='en', use_angle_cls=False):
         if cls._instance is None:
             cls._instance = super(OCREngine, cls).__new__(cls)
-            cls._instance._initialize(lang, use_angle_cls)
+            # Do NOT initialize here to avoid MainThread affinity
+            # cls._instance._initialize(lang, use_angle_cls)
+            cls._instance.config = (lang, use_angle_cls)
         return cls._instance
 
-    def _initialize(self, lang, use_angle_cls):
+    def initialize(self):
+        """Explicit initialization, safe to call from worker thread"""
+        if self._ocr is not None:
+             return
+             
+        lang, use_angle_cls = self.config
         try:
-            logging.info("Initializing PaddleOCR...")
-            # Initialize PaddleOCR (downloads models if needed)
-            self._ocr = PaddleOCR(use_angle_cls=use_angle_cls, lang=lang)
+            # Prevent OpenCV threading conflicts
+            try:
+                import cv2
+                cv2.setNumThreads(0)
+            except: pass
+            
+            logging.info(f"Initializing PaddleOCR (Lang: {lang})...")
+            # Initialize PaddleOCR
+            self._ocr = PaddleOCR(use_angle_cls=use_angle_cls, lang=lang, show_log=False)
             logging.info("PaddleOCR initialized successfully.")
         except Exception as e:
             logging.error(f"Failed to initialize PaddleOCR: {e}")
