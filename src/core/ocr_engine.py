@@ -52,17 +52,31 @@ class OCREngine:
             arr = pil_to_bgr_np(preprocessed)
             
             # Predict
+            # Predict
             result = self._ocr.predict(arr)
             
             texts = []
             if result:
-                for block in result:
-                    if block:
-                        for line in block:
-                             # line is usually [ [coords], (text, conf) ]
-                             if len(line) >= 2 and len(line[1]) >= 1:
-                                 texts.append(line[1][0])
-            
+                # Case 1: Result is a list of dicts (user script format)
+                # Script logic: for block in raw: for element in block: texts.extend(block['rec_texts'])
+                # We will be smarter: just get rec_texts if available
+                # But to match script exactly in case structure is complex list-of-lists-of-dicts?
+                
+                # Check if result is directly a list of dicts
+                if isinstance(result, list):
+                    for block in result:
+                        if isinstance(block, dict) and 'rec_texts' in block:
+                             texts.extend(block['rec_texts'])
+                        elif isinstance(block, list):
+                            # Standard PaddleOCR output: [[[[coords], [text, conf]], ...]]
+                             for line in block:
+                                 if isinstance(line, list) and len(line) >= 2 and len(line[1]) >= 1:
+                                     # line[1][0] is text
+                                     texts.append(line[1][0])
+                                 elif isinstance(line, dict) and 'rec_texts' in line:
+                                      # Nested dict?
+                                      texts.extend(line['rec_texts'])
+                
             return texts
 
         except Exception as e:
