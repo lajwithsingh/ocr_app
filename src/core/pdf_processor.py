@@ -59,6 +59,10 @@ class PDFProcessor:
         
         carried_case = None
         carried_page = None
+        
+        # Track generated files for Excel summary
+        # List of tuples: (filename, start_page, end_page)
+        self.generated_files_data = []
 
         dpi = self.config.get('dpi', 200)
         bottom_fraction = self.config.get('bottom_fraction', 0.10)
@@ -164,10 +168,15 @@ class PDFProcessor:
             final_end_idx = min(calculated_end, total_pages)
             
             # Save
+            # Save
             if chunk_case_num:
-                out_name = f"{chunk_case_num}_pages_{start_idx + 1}-{final_end_idx}.pdf"
+                # User requested format: [CaseNumber].pdf
+                out_name = f"{chunk_case_num}.pdf"
             else:
                 out_name = f"Unknown_pages_{start_idx + 1}-{final_end_idx}.pdf"
+
+            # Add to summary data
+            self.generated_files_data.append((out_name, start_idx + 1, final_end_idx))
                 
             self._save_chunk(doc, start_idx, final_end_idx - 1, out_name)
             
@@ -178,6 +187,33 @@ class PDFProcessor:
             current_index = final_end_idx
 
         doc.close()
+        
+        # Generate Excel Summary
+        self._save_summary_excel()
+
+    def _save_summary_excel(self):
+        """Save processing summary to Excel"""
+        try:
+            import openpyxl
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Processing Summary"
+            
+            # Headers
+            ws.append(["PDF File Generated Name", "PDF Start Location", "PDF End Location"])
+            
+            # Data
+            for row in self.generated_files_data:
+                ws.append(list(row))
+                
+            excel_path = self.output_folder / "summary.xlsx"
+            wb.save(excel_path)
+            logging.info(f"Summary Excel saved to: {excel_path}")
+            self._emit('info', 1.0, f"Summary saved to summary.xlsx")
+            
+        except Exception as e:
+            logging.error(f"Failed to save Excel summary: {e}")
+            self._emit('error', 1.0, f"Failed to save Excel summary: {str(e)}")
 
     def _save_chunk(self, src_doc, start, end, filename):
         try:
